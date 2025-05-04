@@ -28,7 +28,7 @@ for i in range(20):
     message = json.dumps({
         "latitude": latitude,
         "longitude": longitude,
-        "timestamp": time.time()
+        "codErro": 95
     }).encode('utf-8')
 
     sock.sendto(message, (BROADCAST_IP, PORT))
