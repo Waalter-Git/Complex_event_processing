@@ -59,12 +59,12 @@ class CEPProcessor(threading.Thread):
         self.interface.cep_ativo.set(False)
 
     def processar(self):
-        eventos = [d for d in armazenamento_compartilhado if d.get("codErro") in [1, 2, 3, 4]]
+        eventos = [d for d in armazenamento_compartilhado if d.get("codErro") in [2]]
         if len(eventos) < 2:
             return
 
         coords = np.array([[e["latitude"], e["longitude"]] for e in eventos])
-        clustering = DBSCAN(eps=0.0015, min_samples=20).fit(coords)
+        clustering = DBSCAN(eps=0.1, min_samples=15).fit(coords)
         labels = clustering.labels_
 
         for i in set(labels):
@@ -193,7 +193,7 @@ class InterfaceMonitoramento(ctk.CTk):
         self.destroy()
 
     def rodar_transmissor(self):
-        subprocess.Popen([sys.executable, "transmissor.py"])
+        subprocess.Popen([sys.executable, "novoMuckup.py"])
 
     def atualizar_contador(self):
         while self.monitorando:
