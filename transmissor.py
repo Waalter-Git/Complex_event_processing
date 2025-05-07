@@ -15,6 +15,7 @@ base_lat = random.uniform(30, 40)
 base_lon = random.uniform(30, 40)
 
 total_pacotes = 300000
+
 enviados = 0
 
 variaF = 0

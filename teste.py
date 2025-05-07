@@ -12,14 +12,8 @@ from sklearn.cluster import DBSCAN
 import subprocess
 import sys
 
-# Socket para envio de alarmes detectados
-ALARMES_DEST_IP = "10.14.100.224"
-ALARMES_DEST_PORT = 12345
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
 PORT = 5005
 HOST = "0.0.0.0"
-
 armazenamento_compartilhado = []
 logs = []
 ultimos_alarmes = []
@@ -32,8 +26,23 @@ tipo_cores = {
     "quedaEnergia": "green"
 }
 
+# Configuração do envio UDP para o Módulo 3 via broadcast
+MODULO3_PORT = 12345
+BROADCAST_IP = "127.0.0.1"  # Use o IP de broadcast correto da sua rede, se necessário
+
+def enviar_para_modulo3(mensagem):
+    """Envia mensagem JSON por broadcast UDP para o Módulo 3."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.sendto(mensagem.encode('utf-8'), (BROADCAST_IP, MODULO3_PORT))
+        sock.close()
+    except Exception as e:
+        print(f"Erro ao enviar broadcast para Módulo 3: {e}")
+
 # Receptor UDP
 def receptor_udp(interface):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((HOST, PORT))
     interface.udp_ativo.set(True)
     while interface.monitorando:
@@ -55,7 +64,7 @@ class CEPProcessor(threading.Thread):
         self.interface.cep_ativo.set(True)
         while self.interface.monitorando:
             self.processar()
-            time.sleep(5)
+            time.sleep(2)
         self.interface.cep_ativo.set(False)
 
     def processar(self):
@@ -64,13 +73,12 @@ class CEPProcessor(threading.Thread):
             return
 
         coords = np.array([[e["latitude"], e["longitude"]] for e in eventos])
-        clustering = DBSCAN(eps=0.0015, min_samples=20).fit(coords)
+        clustering = DBSCAN(eps=0.001, min_samples=20).fit(coords)
         labels = clustering.labels_
 
         for i in set(labels):
             if i == -1:
                 continue
-
             cluster_indices = np.where(labels == i)[0]
             cluster_eventos = [eventos[idx] for idx in cluster_indices]
             tipo_erro = cluster_eventos[0].get("codErro")
@@ -82,36 +90,19 @@ class CEPProcessor(threading.Thread):
             if len(ultimos_alarmes) > 1:
                 ultimos_alarmes.pop()
 
-            alarme_data = {
-                "URI": "102",
-                "alarme": True,
-                "codErro": tipo_erro,
-                "causa": causa,
+            # Enviar alarme para o Módulo 3 via broadcast UDP
+            mensagem = json.dumps({
+                "URI:": "102",
                 "cluster": i,
-                "quantidadeEventos": len(cluster_eventos),
+                "causa": causa,
+                "quantidade": len(cluster_eventos),
                 "timestamp": horario
-            }
-
-            print(f"[DEBUG] Preparando envio do alarme do Cluster {i}")
-
-
-            # Enviar alarme em thread separada
-            self.enviar_alarme_em_thread(alarme_data)
+            })
+            enviar_para_modulo3(mensagem)
 
         self.interface.update_alarmes()
         self.interface.update_log()
         self.interface.update_grafico()
-
-    def enviar_alarme_em_thread(self, dados):
-        def envio():
-            try:
-                print(f"[ENVIANDO ALARME UDP] Cluster {dados['cluster']} - {dados['causa']}")
-                dados_serializaveis = {k: int(v) if isinstance(v, np.integer) else v for k, v in dados.items()}
-                sock.sendto(json.dumps(dados_serializaveis).encode("utf-8"), (ALARMES_DEST_IP, ALARMES_DEST_PORT))
-                print("[ALARME ENVIADO COM SUCESSO]")
-            except Exception as e:
-                print(f"[ERRO NO ENVIO DE ALARME] {e}")
-        threading.Thread(target=envio, daemon=True).start()
 
 # Interface
 class InterfaceMonitoramento(ctk.CTk):
@@ -198,7 +189,7 @@ class InterfaceMonitoramento(ctk.CTk):
     def atualizar_contador(self):
         while self.monitorando:
             self.contador_label.configure(text=f"Eventos Recebidos: {len(armazenamento_compartilhado)}")
-            time.sleep(0.001)
+            time.sleep(2)
 
     def update_alarmes(self):
         self.texto_alarme.configure(state="normal")
