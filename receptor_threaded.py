@@ -1,4 +1,3 @@
-
 import threading
 import socket
 import json
@@ -20,12 +19,13 @@ class ReceptorUDP(threading.Thread):
             data, _ = sock.recvfrom(1024)
             try:
                 mensagem = json.loads(data.decode('utf-8'))
-                if 'Lat' in mensagem and 'Long' in mensagem:
+                if 'latitude' in mensagem and 'longitude' in mensagem:
                     self.armazenamento.append({
                         "id": contador,
-                        "latitude": mensagem["Lat"],
-                        "longitude": mensagem["Long"],
-                        "codErro": mensagem.get("codErro", None)
+                        "latitude": mensagem["latitude"],
+                        "longitude": mensagem["longitude"],
+                        "codErro": mensagem.get("codErro", None),
+                        "causa": mensagem.get("causa", None)
                     })
                     contador += 1
             except json.JSONDecodeError:

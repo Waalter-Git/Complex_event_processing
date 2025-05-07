@@ -21,48 +21,41 @@ class CEPProcessor(threading.Thread):
             time.sleep(10)
 
     def processar(self):
-        # Filtra somente eventos de queda (codErro == 95)
-        eventos = [d for d in self.armazenamento if d.get("codErro") == 95]
+        for cod in [1, 2, 3, 4]:  # codErro válidos
+            eventos_cod = [d for d in self.armazenamento if d.get("codErro") == cod]
+            if len(eventos_cod) < 3:
+                continue
 
-        # Ignora processamento caso existam poucos eventos
-        if len(eventos) < 3:
-            return
+            pontos = np.array([[e["latitude"], e["longitude"]] for e in eventos_cod])
+            pontos_rad = np.radians(pontos)
 
-        # Extrai latitude e longitude dos eventos
-        pontos = np.array([[e["latitude"], e["longitude"]] for e in eventos])
-        pontos_rad = np.radians(pontos)
+            db = DBSCAN(
+                eps=300 / 6371000,
+                min_samples=20,
+                metric='haversine'
+            )
+            labels = db.fit_predict(pontos_rad)
 
-        # Executa DBSCAN para encontrar aglomerações de eventos (clusters)
-        db = DBSCAN(
-            eps=300 / 6371000,
-            min_samples=20,
-            metric='haversine'
-        )
-        labels = db.fit_predict(pontos_rad)
+            clusters = {}
+            for i, label in enumerate(labels):
+                if label == -1:
+                    continue
+                clusters.setdefault(label, []).append(pontos[i])
 
-        clusters = {}
-        for i, label in enumerate(labels):
-            if label == -1:
-                continue  # Ignora pontos classificados como ruído
-            clusters.setdefault(label, []).append(pontos[i])
-
-        # Se nenhum cluster válido for formado, não faz nada
-        if not clusters:
-            return
-
-        # Envia um alarme para cada cluster formado
-        for cluster_id, cluster in clusters.items():
-            media = np.mean(cluster, axis=0)
-            alarme = {
-                "eventoID": f"cluster_{cluster_id}",
-                "timestamp": datetime.now().isoformat(),
-                "numero_quedas": len(cluster),
-                "localizacao_media": {
-                    "latitude": float(media[0]),
-                    "longitude": float(media[1])
+            for cluster_id, cluster in clusters.items():
+                media = np.mean(cluster, axis=0)
+                alarme = {
+                    "eventoID": f"cluster_{cod}_{cluster_id}",
+                    "codErro": cod,
+                    "causa": eventos_cod[0].get("causa", "descohecida"),
+                    "timestamp": datetime.now().isoformat(),
+                    "numero_eventos": len(cluster),
+                    "localizacao_media": {
+                        "latitude": float(media[0]),
+                        "longitude": float(media[1])
+                    }
                 }
-            }
-            self.enviar_tcp(alarme)
+                self.enviar_tcp(alarme)
 
     def enviar_tcp(self, alarme):
         try:
