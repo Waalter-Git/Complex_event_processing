@@ -1,171 +1,183 @@
+import tkinter as tk
 import customtkinter as ctk
-import threading
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 import socket
+import threading
 import json
-import numpy as np
 import time
+import numpy as np
 from datetime import datetime
 from sklearn.cluster import DBSCAN
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import subprocess
+import sys
 
-# === DADOS GLOBAIS ===
-PORTA_UDP = 5005
-PORTA_TCP = 6006
-armazenamento = {1: [], 2: [], 3: [], 4: []}
-fila_alarmes = []
-coordenadas = []
-eventos_recebidos = 0
+PORT = 5005
+HOST = "0.0.0.0"
+armazenamento_compartilhado = []
+logs = []
+ultimos_alarmes = []
 
-# === THREAD 1: RECEPTOR UDP ===
-class ReceptorUDP(threading.Thread):
-    def run(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind(("0.0.0.0", PORTA_UDP))
-        print("Thread UDP iniciada.")
-        while True:
-            try:
-                data, addr = sock.recvfrom(1024)
-                msg = json.loads(data.decode("utf-8"))
-                cod = msg.get("codErro")
-                if cod in armazenamento:
-                    armazenamento[cod].append(msg)
-            except Exception as e:
-                print(f"[UDP] Erro: {e}")
+# Receptor UDP
+def receptor_udp(interface):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((HOST, PORT))
+    interface.udp_ativo.set(True)
+    while interface.monitorando:
+        try:
+            data, _ = sock.recvfrom(1024)
+            msg = json.loads(data.decode('utf-8'))
+            armazenamento_compartilhado.append(msg)
+        except:
+            continue
+    interface.udp_ativo.set(False)
 
-# === THREAD 2: PROCESSADOR CEP ===
+# CEP
 class CEPProcessor(threading.Thread):
+    def __init__(self, interface):
+        super().__init__(daemon=True)
+        self.interface = interface
+
     def run(self):
-        print("Thread CEP iniciada.")
-        while True:
-            for cod in range(1, 5):
-                eventos_cod = armazenamento.get(cod, [])
-                if len(eventos_cod) < 3:
-                    continue
-                pontos = np.array([[e["latitude"], e["longitude"]] for e in eventos_cod])
-                pontos_rad = np.radians(pontos)
-                db = DBSCAN(eps=300/6371000, min_samples=20, metric='haversine')
-                labels = db.fit_predict(pontos_rad)
-                clusters = {}
-                for i, label in enumerate(labels):
-                    if label == -1:
-                        continue
-                    clusters.setdefault(label, []).append(pontos[i])
-                for cluster_id, cluster in clusters.items():
-                    media = np.mean(cluster, axis=0)
-                    alarme = {
-                        "eventoID": f"cluster_{cod}_{cluster_id}",
-                        "codErro": cod,
-                        "causa": ["altaTensao", "variaFreq", "subTensao", "quedaEnergia"][cod-1],
-                        "timestamp": datetime.now().isoformat(),
-                        "numero_eventos": len(cluster),
-                        "localizacao_media": {"latitude": float(media[0]), "longitude": float(media[1])}
-                    }
-                    try:
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                            s.connect(("127.0.0.1", PORTA_TCP))
-                            s.sendall(json.dumps(alarme).encode("utf-8"))
-                            print("Alarme enviado.")
-                    except Exception as e:
-                        print(f"[CEP] Falha no TCP: {e}")
-            time.sleep(10)
+        self.interface.cep_ativo.set(True)
+        while self.interface.monitorando:
+            self.processar()
+            time.sleep(5)
+        self.interface.cep_ativo.set(False)
 
-# === THREAD 3: INTERFACE TCP RECEBIMENTO ===
-def escutar_tcp():
-    global eventos_recebidos
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("0.0.0.0", PORTA_TCP))
-        s.listen()
-        print("Thread Interface TCP escutando...")
-        while True:
-            conn, _ = s.accept()
-            with conn:
-                data = conn.recv(4096)
-                if data:
-                    try:
-                        alarme = json.loads(data.decode("utf-8"))
-                        fila_alarmes.append(alarme)
-                        eventos_recebidos += alarme.get("numero_eventos", 0)
-                        media = alarme.get("localizacao_media", {})
-                        coordenadas.append((media.get("latitude", 0), media.get("longitude", 0)))
-                        if 'root' in globals():
-                            root.after(100, atualizar_interface)
-                    except Exception as e:
-                        print(f"[TCP] Interface erro: {e}")
+    def processar(self):
+        eventos = [d for d in armazenamento_compartilhado if d.get("codErro") == 95]
+        if len(eventos) < 2:
+            return
+        coords = np.array([[e["latitude"], e["longitude"]] for e in eventos])
+        clustering = DBSCAN(eps=0.0015, min_samples=2).fit(coords)
+        labels = clustering.labels_
 
-# === INTERFACE MONITORAMENTO ===
-def iniciar_interface_monitoramento():
-    global root, canvas, grafico, area_alarme, log, contador_label
-    ctk.set_appearance_mode("light")
-    ctk.set_default_color_theme("blue")
+        for i in set(labels):
+            if i == -1:
+                continue
+            cluster_coords = coords[labels == i]
+            horario = datetime.now().strftime("%Y-%m-%d %H:%M")
+            texto = f"Cluster_{i} – {len(cluster_coords)} quedas\n{horario}\n{cluster_coords[0][0]:.5f}, {cluster_coords[0][1]:.5f}"
+            ultimos_alarmes.insert(0, texto)
+            logs.append(f"[{horario}] Alarme gerado: Cluster_{i}")
+            if len(ultimos_alarmes) > 1:
+                ultimos_alarmes.pop()
 
-    root = ctk.CTk()
-    root.title("Monitoramento de Quedas")
-    root.geometry("1100x750")
+        self.interface.update_alarmes()
+        self.interface.update_log()
+        self.interface.update_grafico(coords)
 
-    ctk.CTkLabel(root, text="Monitoramento de Quedas", font=("Arial", 24, "bold")).pack(pady=10)
-    contador_label = ctk.CTkLabel(root, text="Eventos Recebidos: 0", font=("Arial", 14))
-    contador_label.pack()
+# Interface
+class InterfaceMonitoramento(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Monitoramento de Quedas - Módulo 5b")
+        self.geometry("1050x650")
+        self.monitorando = False
+        ctk.set_appearance_mode("light")
 
-    frame_conteudo = ctk.CTkFrame(root)
-    frame_conteudo.pack(fill="both", expand=True, padx=10, pady=10)
-    frame_conteudo.grid_columnconfigure(0, weight=1)
-    frame_conteudo.grid_columnconfigure(1, weight=2)
+        self.udp_ativo = tk.BooleanVar(value=False)
+        self.cep_ativo = tk.BooleanVar(value=False)
 
-    frame_esquerda = ctk.CTkFrame(frame_conteudo)
-    frame_esquerda.grid(row=0, column=0, sticky="nswe", padx=10, pady=10)
-    area_alarme = ctk.CTkTextbox(frame_esquerda, height=120)
-    area_alarme.pack(pady=5, padx=10)
-    log = ctk.CTkTextbox(frame_esquerda, height=200)
-    log.pack(pady=5, padx=10)
+        self.init_ui()
 
-    frame_direita = ctk.CTkFrame(frame_conteudo)
-    frame_direita.grid(row=0, column=1, sticky="nswe", padx=10, pady=10)
-    fig, grafico = plt.subplots(figsize=(6, 4.5))
-    canvas = FigureCanvasTkAgg(fig, master=frame_direita)
-    canvas.get_tk_widget().pack(fill="both", expand=True)
+    def init_ui(self):
+        titulo = ctk.CTkLabel(self, text="Monitoramento de Quedas", font=("Arial", 24, "bold"))
+        titulo.pack(pady=(10, 5))
 
-    ctk.CTkButton(root, text="Encerrar", command=root.destroy).pack(pady=10)
+        status_frame = ctk.CTkFrame(self, fg_color="transparent")
+        status_frame.pack(pady=5)
 
-    root.mainloop()
+        self.udp_check = ctk.CTkCheckBox(status_frame, text="UDP Ativo", variable=self.udp_ativo, state="disabled")
+        self.udp_check.grid(row=0, column=0, padx=10)
 
-def atualizar_interface():
-    contador_label.configure(text=f"Eventos Recebidos: {eventos_recebidos}")
-    if fila_alarmes:
-        alarme = fila_alarmes[-1]
-        texto = f"🔔 {alarme['eventoID']} – {alarme['numero_eventos']} eventos\n" \
-                f"{alarme['timestamp']}\n" \
-                f"{alarme['localizacao_media']['latitude']}, {alarme['localizacao_media']['longitude']}"
-        area_alarme.configure(state="normal")
-        area_alarme.delete("0.0", "end")
-        area_alarme.insert("0.0", texto)
-        area_alarme.configure(state="disabled")
-        log.insert("end", f"[{alarme['timestamp']}] {alarme['eventoID']} ({alarme['causa']})\n")
-        log.see("end")
-    grafico.clear()
-    if coordenadas:
-        lats, longs = zip(*coordenadas)
-        grafico.scatter(longs, lats, c='red', marker='x')
-        grafico.set_title("Gráfico de Quedas")
-        grafico.set_xlabel("Longitude")
-        grafico.set_ylabel("Latitude")
-    canvas.draw()
+        self.cep_check = ctk.CTkCheckBox(status_frame, text="CEP Ativo", variable=self.cep_ativo, state="disabled")
+        self.cep_check.grid(row=0, column=1, padx=10)
 
-# === INTERFACE DE CONTROLE PRINCIPAL ===
-def main_interface():
-    app = ctk.CTk()
-    app.title("Central de Controle")
-    app.geometry("400x400")
+        self.contador_label = ctk.CTkLabel(status_frame, text="Eventos Recebidos: 0", font=("Arial", 14))
+        self.contador_label.grid(row=0, column=2, padx=20)
 
-    ctk.CTkLabel(app, text="Controle do Sistema", font=("Arial", 20)).pack(pady=20)
+        container = ctk.CTkFrame(self)
+        container.pack(fill="both", expand=True, padx=10, pady=5)
 
-    ctk.CTkButton(app, text="Iniciar Receptor UDP", command=lambda: ReceptorUDP().start()).pack(pady=10)
-    ctk.CTkButton(app, text="Iniciar CEP Processor", command=lambda: CEPProcessor().start()).pack(pady=10)
-    ctk.CTkButton(app, text="Iniciar Interface de Monitoramento", command=lambda: threading.Thread(target=iniciar_interface_monitoramento, daemon=True).start()).pack(pady=10)
-    ctk.CTkButton(app, text="Ativar Escuta TCP", command=lambda: threading.Thread(target=escutar_tcp, daemon=True).start()).pack(pady=10)
+        # Painel lateral esquerdo
+        painel_esquerdo = ctk.CTkFrame(container, width=300)
+        painel_esquerdo.pack(side="left", fill="y", padx=10, pady=10)
 
-    ctk.CTkButton(app, text="Sair", command=app.destroy, fg_color="red").pack(pady=20)
-    app.mainloop()
+        self.alarmes_label = ctk.CTkLabel(painel_esquerdo, text="Últimos Alarmes", font=("Arial", 16))
+        self.alarmes_label.pack(pady=5)
+
+        self.texto_alarme = ctk.CTkTextbox(painel_esquerdo, width=280, height=100)
+        self.texto_alarme.pack(pady=5)
+
+        self.log_label = ctk.CTkLabel(painel_esquerdo, text="Log", font=("Arial", 16))
+        self.log_label.pack(pady=5)
+
+        self.texto_log = ctk.CTkTextbox(painel_esquerdo, width=280, height=200)
+        self.texto_log.pack(pady=5)
+
+        # Gráfico à direita
+        painel_direito = ctk.CTkFrame(container)
+        painel_direito.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+
+        self.fig = Figure(figsize=(5, 4), dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_title("Gráfico de Quedas")
+        self.ax.set_xlabel("Longitude")
+        self.ax.set_ylabel("Latitude")
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=painel_direito)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        # Botão de controle
+        self.botao_finalizar = ctk.CTkButton(self, text="Encerrar Monitoramento", command=self.encerrar_monitoramento)
+        self.botao_finalizar.pack(pady=10)
+
+        self.iniciar_monitoramento()
+
+    def iniciar_monitoramento(self):
+        self.monitorando = True
+        threading.Thread(target=receptor_udp, args=(self,), daemon=True).start()
+        threading.Thread(target=self.rodar_transmissor, daemon=True).start()
+        CEPProcessor(interface=self).start()
+        threading.Thread(target=self.atualizar_contador, daemon=True).start()
+
+    def encerrar_monitoramento(self):
+        self.monitorando = False
+        self.destroy()
+
+    def rodar_transmissor(self):
+        subprocess.Popen([sys.executable, "transmissor.py"])
+
+    def atualizar_contador(self):
+        while self.monitorando:
+            self.contador_label.configure(text=f"Eventos Recebidos: {len(armazenamento_compartilhado)}")
+            time.sleep(1)
+
+    def update_alarmes(self):
+        self.texto_alarme.configure(state="normal")
+        self.texto_alarme.delete("1.0", "end")
+        for item in ultimos_alarmes:
+            self.texto_alarme.insert("end", item + "\n")
+        self.texto_alarme.configure(state="disabled")
+
+    def update_log(self):
+        self.texto_log.configure(state="normal")
+        self.texto_log.delete("1.0", "end")
+        for item in logs[-20:]:
+            self.texto_log.insert("end", item + "\n")
+        self.texto_log.configure(state="disabled")
+
+    def update_grafico(self, coords):
+        self.ax.clear()
+        self.ax.set_title("Gráfico de Quedas")
+        self.ax.set_xlabel("Longitude")
+        self.ax.set_ylabel("Latitude")
+        if coords is not None and len(coords) > 0:
+            self.ax.scatter(coords[:, 1], coords[:, 0], color='red', marker='x')
+        self.canvas.draw()
 
 if __name__ == "__main__":
-    main_interface()
+    app = InterfaceMonitoramento()
+    app.mainloop()
