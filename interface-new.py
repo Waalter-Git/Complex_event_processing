@@ -18,6 +18,14 @@ armazenamento_compartilhado = []
 logs = []
 ultimos_alarmes = []
 
+causas = ["altaTensao", "variaFreq", "subTensao", "quedaEnergia"]
+tipo_cores = {
+    "altaTensao": "red",
+    "variaFreq": "blue",
+    "subTensao": "gold",
+    "quedaEnergia": "green"
+}
+
 # Receptor UDP
 def receptor_udp(interface):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -46,9 +54,10 @@ class CEPProcessor(threading.Thread):
         self.interface.cep_ativo.set(False)
 
     def processar(self):
-        eventos = [d for d in armazenamento_compartilhado if d.get("codErro") == 95]
+        eventos = [d for d in armazenamento_compartilhado if d.get("codErro") in [1, 2, 3, 4]]
         if len(eventos) < 2:
             return
+
         coords = np.array([[e["latitude"], e["longitude"]] for e in eventos])
         clustering = DBSCAN(eps=0.0015, min_samples=2).fit(coords)
         labels = clustering.labels_
@@ -56,17 +65,20 @@ class CEPProcessor(threading.Thread):
         for i in set(labels):
             if i == -1:
                 continue
-            cluster_coords = coords[labels == i]
+            cluster_indices = np.where(labels == i)[0]
+            cluster_eventos = [eventos[idx] for idx in cluster_indices]
+            tipo_erro = cluster_eventos[0].get("codErro")
+            causa = causas[tipo_erro - 1]
             horario = datetime.now().strftime("%Y-%m-%d %H:%M")
-            texto = f"Cluster_{i} – {len(cluster_coords)} quedas\n{horario}\n{cluster_coords[0][0]:.5f}, {cluster_coords[0][1]:.5f}"
+            texto = f"Cluster_{i} – {len(cluster_eventos)} eventos\n{horario}"
             ultimos_alarmes.insert(0, texto)
-            logs.append(f"[{horario}] Alarme gerado: Cluster_{i}")
+            logs.append(f"[{horario}] Alarme gerado ({causa}): Cluster_{i}")
             if len(ultimos_alarmes) > 1:
                 ultimos_alarmes.pop()
 
         self.interface.update_alarmes()
         self.interface.update_log()
-        self.interface.update_grafico(coords)
+        self.interface.update_grafico()
 
 # Interface
 class InterfaceMonitoramento(ctk.CTk):
@@ -117,7 +129,7 @@ class InterfaceMonitoramento(ctk.CTk):
         self.texto_log = ctk.CTkTextbox(painel_esquerdo, width=280, height=200)
         self.texto_log.pack(pady=5)
 
-        # Gráfico à direita
+        # Painel direito - gráfico
         painel_direito = ctk.CTkFrame(container)
         painel_direito.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
@@ -130,7 +142,7 @@ class InterfaceMonitoramento(ctk.CTk):
         self.canvas = FigureCanvasTkAgg(self.fig, master=painel_direito)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
-        # Botão de controle
+        # Botão
         self.botao_finalizar = ctk.CTkButton(self, text="Encerrar Monitoramento", command=self.encerrar_monitoramento)
         self.botao_finalizar.pack(pady=10)
 
@@ -169,14 +181,28 @@ class InterfaceMonitoramento(ctk.CTk):
             self.texto_log.insert("end", item + "\n")
         self.texto_log.configure(state="disabled")
 
-    def update_grafico(self, coords):
+    def update_grafico(self):
         self.ax.clear()
         self.ax.set_title("Gráfico de Quedas")
         self.ax.set_xlabel("Longitude")
         self.ax.set_ylabel("Latitude")
-        if coords is not None and len(coords) > 0:
-            self.ax.scatter(coords[:, 1], coords[:, 0], color='red', marker='x')
+
+        eventos_por_tipo = {tipo: [] for tipo in tipo_cores}
+
+        for d in armazenamento_compartilhado:
+            cod = d.get("codErro")
+            if cod in [1, 2, 3, 4]:
+                causa = causas[cod - 1]
+                eventos_por_tipo[causa].append((d["longitude"], d["latitude"]))
+
+        for tipo, pontos in eventos_por_tipo.items():
+            if pontos:
+                x, y = zip(*pontos)
+                self.ax.scatter(x, y, color=tipo_cores[tipo], label=tipo)
+
+        self.ax.legend(title="Legenda")
         self.canvas.draw()
+
 
 if __name__ == "__main__":
     app = InterfaceMonitoramento()
