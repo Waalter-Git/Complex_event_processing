@@ -26,6 +26,20 @@ tipo_cores = {
     "quedaEnergia": "green"
 }
 
+# Configuração do envio UDP para o Módulo 3 via broadcast
+MODULO3_PORT = 6006
+BROADCAST_IP = "255.255.255.255"  # Use o IP de broadcast correto da sua rede, se necessário
+
+def enviar_para_modulo3(mensagem):
+    """Envia mensagem JSON por broadcast UDP para o Módulo 3."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.sendto(mensagem.encode('utf-8'), (BROADCAST_IP, MODULO3_PORT))
+        sock.close()
+    except Exception as e:
+        print(f"Erro ao enviar broadcast para Módulo 3: {e}")
+
 # Receptor UDP
 def receptor_udp(interface):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -50,7 +64,7 @@ class CEPProcessor(threading.Thread):
         self.interface.cep_ativo.set(True)
         while self.interface.monitorando:
             self.processar()
-            time.sleep(5)
+            time.sleep(2)
         self.interface.cep_ativo.set(False)
 
     def processar(self):
@@ -59,7 +73,7 @@ class CEPProcessor(threading.Thread):
             return
 
         coords = np.array([[e["latitude"], e["longitude"]] for e in eventos])
-        clustering = DBSCAN(eps=0.0015, min_samples=20).fit(coords)
+        clustering = DBSCAN(eps=0.001, min_samples=20).fit(coords)
         labels = clustering.labels_
 
         for i in set(labels):
@@ -75,6 +89,15 @@ class CEPProcessor(threading.Thread):
             logs.append(f"[{horario}] Alarme gerado ({causa}): Cluster_{i}")
             if len(ultimos_alarmes) > 1:
                 ultimos_alarmes.pop()
+
+            # Enviar alarme para o Módulo 3 via broadcast UDP
+            mensagem = json.dumps({
+                "cluster": i,
+                "causa": causa,
+                "quantidade": len(cluster_eventos),
+                "timestamp": horario
+            })
+            enviar_para_modulo3(mensagem)
 
         self.interface.update_alarmes()
         self.interface.update_log()
@@ -165,7 +188,7 @@ class InterfaceMonitoramento(ctk.CTk):
     def atualizar_contador(self):
         while self.monitorando:
             self.contador_label.configure(text=f"Eventos Recebidos: {len(armazenamento_compartilhado)}")
-            time.sleep(0.001)
+            time.sleep(2)
 
     def update_alarmes(self):
         self.texto_alarme.configure(state="normal")
