@@ -59,7 +59,7 @@ class CEPProcessor(threading.Thread):
             return
 
         coords = np.array([[e["latitude"], e["longitude"]] for e in eventos])
-        clustering = DBSCAN(eps=0.0015, min_samples=2).fit(coords)
+        clustering = DBSCAN(eps=0.0015, min_samples=20).fit(coords)
         labels = clustering.labels_
 
         for i in set(labels):
@@ -165,7 +165,7 @@ class InterfaceMonitoramento(ctk.CTk):
     def atualizar_contador(self):
         while self.monitorando:
             self.contador_label.configure(text=f"Eventos Recebidos: {len(armazenamento_compartilhado)}")
-            time.sleep(1)
+            time.sleep(0.001)
 
     def update_alarmes(self):
         self.texto_alarme.configure(state="normal")
