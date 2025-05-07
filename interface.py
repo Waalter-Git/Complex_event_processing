@@ -1,8 +1,10 @@
 import customtkinter as ctk
+import socket
+import threading
+import json
 from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import random
 
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
@@ -11,26 +13,32 @@ eventos_recebidos = 0
 coordenadas = []
 fila_alarmes = []
 
-def simular_recebimento():
+def receber_tcp():
     global eventos_recebidos
 
-    lat = -18.91 + random.uniform(-0.01, 0.01)
-    lon = -48.26 + random.uniform(-0.01, 0.01)
-    eventos_recebidos += 1
-    coordenadas.append((lat, lon))
+    HOST = "0.0.0.0"
+    PORT = 6006
 
-    if eventos_recebidos % 5 == 0:
-        alarme = {
-            "eventoID": f"Cluster_{eventos_recebidos//5}",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "latitude": round(lat, 5),
-            "longitude": round(lon, 5),
-            "numero_quedas": 3
-        }
-        fila_alarmes.append(alarme)
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind((HOST, PORT))
+    server_socket.listen()
+    print(f"Interface TCP escutando em {HOST}:{PORT}...")
 
-    atualizar_interface()
-    root.after(1000, simular_recebimento)
+    while True:
+        conn, addr = server_socket.accept()
+        with conn:
+            data = conn.recv(4096)
+            if data:
+                try:
+                    alarme = json.loads(data.decode("utf-8"))
+                    eventos_recebidos += alarme.get("numero_eventos", 0)
+                    lat = alarme["localizacao_media"]["latitude"]
+                    lon = alarme["localizacao_media"]["longitude"]
+                    coordenadas.append((lat, lon))
+                    fila_alarmes.append(alarme)
+                    atualizar_interface()
+                except Exception as e:
+                    print(f"Erro ao processar alarme recebido: {e}")
 
 def atualizar_interface():
     status_udp.configure(text="✅ Thread UDP Ativa")
@@ -39,15 +47,16 @@ def atualizar_interface():
 
     if fila_alarmes:
         alarme = fila_alarmes[-1]
-        texto = f"🔔 {alarme['eventoID']} – {alarme['numero_quedas']} quedas\n" \
+        texto = f"🔔 {alarme['eventoID']} – {alarme['numero_eventos']} eventos\n" \
                 f"{alarme['timestamp']}\n" \
-                f"{alarme['latitude']}, {alarme['longitude']}"
+                f"{alarme['localizacao_media']['latitude']}, {alarme['localizacao_media']['longitude']}\n" \
+                f"Causa: {alarme.get('causa', 'N/A')} (cod {alarme.get('codErro', '-')})"
         area_alarme.configure(state="normal")
         area_alarme.delete("0.0", "end")
         area_alarme.insert("0.0", texto)
         area_alarme.configure(state="disabled")
 
-        log.insert("end", f"[{alarme['timestamp']}] Alarme gerado: {alarme['eventoID']}\n")
+        log.insert("end", f"[{alarme['timestamp']}] Alarme gerado: {alarme['eventoID']} - {alarme.get('causa')}\n")
         log.see("end")
 
     atualizar_grafico()
@@ -57,7 +66,7 @@ def atualizar_grafico():
     if coordenadas:
         lats, longs = zip(*coordenadas)
         grafico.scatter(longs, lats, c='red', marker='x')
-        grafico.set_title("Gráfico de Quedas")
+        grafico.set_title("Gráfico de Eventos Agrupados")
         grafico.set_xlabel("Longitude")
         grafico.set_ylabel("Latitude")
     canvas.draw()
@@ -89,7 +98,7 @@ frame_conteudo = ctk.CTkFrame(root, fg_color="transparent")
 frame_conteudo.pack(pady=5, fill="both", expand=True)
 
 frame_conteudo.grid_columnconfigure(0, weight=1)
-frame_conteudo.grid_columnconfigure(1, weight=2)  # gráfico com mais espaço
+frame_conteudo.grid_columnconfigure(1, weight=2)
 
 # ALARMES E LOG
 frame_esquerda = ctk.CTkFrame(frame_conteudo, fg_color="#e5e5e5", corner_radius=10)
@@ -110,7 +119,7 @@ frame_direita.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
 
 ctk.CTkLabel(frame_direita, text="Gráfico", font=("Arial", 16, "bold")).pack(pady=5)
 
-fig, grafico = plt.subplots(figsize=(7, 5.5))  # gráfico maior
+fig, grafico = plt.subplots(figsize=(7, 5.5))
 canvas = FigureCanvasTkAgg(fig, master=frame_direita)
 canvas.get_tk_widget().pack(expand=True, fill="both")
 
@@ -118,5 +127,7 @@ canvas.get_tk_widget().pack(expand=True, fill="both")
 botao_sair = ctk.CTkButton(root, text="Encerrar Monitoramento", fg_color="gray", command=root.destroy)
 botao_sair.pack(pady=15)
 
-simular_recebimento()
+# Inicia a thread de escuta TCP
+threading.Thread(target=receber_tcp, daemon=True).start()
+
 root.mainloop()
