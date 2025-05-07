@@ -1,0 +1,171 @@
+import customtkinter as ctk
+import threading
+import socket
+import json
+import numpy as np
+import time
+from datetime import datetime
+from sklearn.cluster import DBSCAN
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+# === DADOS GLOBAIS ===
+PORTA_UDP = 5005
+PORTA_TCP = 6006
+armazenamento = {1: [], 2: [], 3: [], 4: []}
+fila_alarmes = []
+coordenadas = []
+eventos_recebidos = 0
+
+# === THREAD 1: RECEPTOR UDP ===
+class ReceptorUDP(threading.Thread):
+    def run(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("0.0.0.0", PORTA_UDP))
+        print("Thread UDP iniciada.")
+        while True:
+            try:
+                data, addr = sock.recvfrom(1024)
+                msg = json.loads(data.decode("utf-8"))
+                cod = msg.get("codErro")
+                if cod in armazenamento:
+                    armazenamento[cod].append(msg)
+            except Exception as e:
+                print(f"[UDP] Erro: {e}")
+
+# === THREAD 2: PROCESSADOR CEP ===
+class CEPProcessor(threading.Thread):
+    def run(self):
+        print("Thread CEP iniciada.")
+        while True:
+            for cod in range(1, 5):
+                eventos_cod = armazenamento.get(cod, [])
+                if len(eventos_cod) < 3:
+                    continue
+                pontos = np.array([[e["latitude"], e["longitude"]] for e in eventos_cod])
+                pontos_rad = np.radians(pontos)
+                db = DBSCAN(eps=300/6371000, min_samples=20, metric='haversine')
+                labels = db.fit_predict(pontos_rad)
+                clusters = {}
+                for i, label in enumerate(labels):
+                    if label == -1:
+                        continue
+                    clusters.setdefault(label, []).append(pontos[i])
+                for cluster_id, cluster in clusters.items():
+                    media = np.mean(cluster, axis=0)
+                    alarme = {
+                        "eventoID": f"cluster_{cod}_{cluster_id}",
+                        "codErro": cod,
+                        "causa": ["altaTensao", "variaFreq", "subTensao", "quedaEnergia"][cod-1],
+                        "timestamp": datetime.now().isoformat(),
+                        "numero_eventos": len(cluster),
+                        "localizacao_media": {"latitude": float(media[0]), "longitude": float(media[1])}
+                    }
+                    try:
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            s.connect(("127.0.0.1", PORTA_TCP))
+                            s.sendall(json.dumps(alarme).encode("utf-8"))
+                            print("Alarme enviado.")
+                    except Exception as e:
+                        print(f"[CEP] Falha no TCP: {e}")
+            time.sleep(10)
+
+# === THREAD 3: INTERFACE TCP RECEBIMENTO ===
+def escutar_tcp():
+    global eventos_recebidos
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("0.0.0.0", PORTA_TCP))
+        s.listen()
+        print("Thread Interface TCP escutando...")
+        while True:
+            conn, _ = s.accept()
+            with conn:
+                data = conn.recv(4096)
+                if data:
+                    try:
+                        alarme = json.loads(data.decode("utf-8"))
+                        fila_alarmes.append(alarme)
+                        eventos_recebidos += alarme.get("numero_eventos", 0)
+                        media = alarme.get("localizacao_media", {})
+                        coordenadas.append((media.get("latitude", 0), media.get("longitude", 0)))
+                        if 'root' in globals():
+                            root.after(100, atualizar_interface)
+                    except Exception as e:
+                        print(f"[TCP] Interface erro: {e}")
+
+# === INTERFACE MONITORAMENTO ===
+def iniciar_interface_monitoramento():
+    global root, canvas, grafico, area_alarme, log, contador_label
+    ctk.set_appearance_mode("light")
+    ctk.set_default_color_theme("blue")
+
+    root = ctk.CTk()
+    root.title("Monitoramento de Quedas")
+    root.geometry("1100x750")
+
+    ctk.CTkLabel(root, text="Monitoramento de Quedas", font=("Arial", 24, "bold")).pack(pady=10)
+    contador_label = ctk.CTkLabel(root, text="Eventos Recebidos: 0", font=("Arial", 14))
+    contador_label.pack()
+
+    frame_conteudo = ctk.CTkFrame(root)
+    frame_conteudo.pack(fill="both", expand=True, padx=10, pady=10)
+    frame_conteudo.grid_columnconfigure(0, weight=1)
+    frame_conteudo.grid_columnconfigure(1, weight=2)
+
+    frame_esquerda = ctk.CTkFrame(frame_conteudo)
+    frame_esquerda.grid(row=0, column=0, sticky="nswe", padx=10, pady=10)
+    area_alarme = ctk.CTkTextbox(frame_esquerda, height=120)
+    area_alarme.pack(pady=5, padx=10)
+    log = ctk.CTkTextbox(frame_esquerda, height=200)
+    log.pack(pady=5, padx=10)
+
+    frame_direita = ctk.CTkFrame(frame_conteudo)
+    frame_direita.grid(row=0, column=1, sticky="nswe", padx=10, pady=10)
+    fig, grafico = plt.subplots(figsize=(6, 4.5))
+    canvas = FigureCanvasTkAgg(fig, master=frame_direita)
+    canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    ctk.CTkButton(root, text="Encerrar", command=root.destroy).pack(pady=10)
+
+    root.mainloop()
+
+def atualizar_interface():
+    contador_label.configure(text=f"Eventos Recebidos: {eventos_recebidos}")
+    if fila_alarmes:
+        alarme = fila_alarmes[-1]
+        texto = f"🔔 {alarme['eventoID']} – {alarme['numero_eventos']} eventos\n" \
+                f"{alarme['timestamp']}\n" \
+                f"{alarme['localizacao_media']['latitude']}, {alarme['localizacao_media']['longitude']}"
+        area_alarme.configure(state="normal")
+        area_alarme.delete("0.0", "end")
+        area_alarme.insert("0.0", texto)
+        area_alarme.configure(state="disabled")
+        log.insert("end", f"[{alarme['timestamp']}] {alarme['eventoID']} ({alarme['causa']})\n")
+        log.see("end")
+    grafico.clear()
+    if coordenadas:
+        lats, longs = zip(*coordenadas)
+        grafico.scatter(longs, lats, c='red', marker='x')
+        grafico.set_title("Gráfico de Quedas")
+        grafico.set_xlabel("Longitude")
+        grafico.set_ylabel("Latitude")
+    canvas.draw()
+
+# === INTERFACE DE CONTROLE PRINCIPAL ===
+def main_interface():
+    app = ctk.CTk()
+    app.title("Central de Controle")
+    app.geometry("400x400")
+
+    ctk.CTkLabel(app, text="Controle do Sistema", font=("Arial", 20)).pack(pady=20)
+
+    ctk.CTkButton(app, text="Iniciar Receptor UDP", command=lambda: ReceptorUDP().start()).pack(pady=10)
+    ctk.CTkButton(app, text="Iniciar CEP Processor", command=lambda: CEPProcessor().start()).pack(pady=10)
+    ctk.CTkButton(app, text="Iniciar Interface de Monitoramento", command=lambda: threading.Thread(target=iniciar_interface_monitoramento, daemon=True).start()).pack(pady=10)
+    ctk.CTkButton(app, text="Ativar Escuta TCP", command=lambda: threading.Thread(target=escutar_tcp, daemon=True).start()).pack(pady=10)
+
+    ctk.CTkButton(app, text="Sair", command=app.destroy, fg_color="red").pack(pady=20)
+    app.mainloop()
+
+if __name__ == "__main__":
+    main_interface()

@@ -7,6 +7,14 @@ from datetime import datetime
 from sklearn.cluster import DBSCAN
 from receptor_threaded import ReceptorUDP
 
+# Mapeamento entre codErro e causa correspondente
+CAUSAS_ERRO = {
+    1: "altaTensao",
+    2: "variaFreq",
+    3: "subTensao",
+    4: "quedaEnergia"
+}
+
 class CEPProcessor(threading.Thread):
     def __init__(self, armazenamento_compartilhado, ip_destino="127.0.0.1", porta_destino=6006):
         super().__init__(daemon=True)
@@ -21,8 +29,8 @@ class CEPProcessor(threading.Thread):
             time.sleep(10)
 
     def processar(self):
-        for cod in [1, 2, 3, 4]:  # codErro válidos
-            eventos_cod = [d for d in self.armazenamento if d.get("codErro") == cod]
+        for cod in range(1, 5):
+            eventos_cod = self.armazenamento.get(cod, [])
             if len(eventos_cod) < 3:
                 continue
 
@@ -30,7 +38,7 @@ class CEPProcessor(threading.Thread):
             pontos_rad = np.radians(pontos)
 
             db = DBSCAN(
-                eps=300 / 6371000,
+                eps=300 / 6371000,  # 300 metros convertidos para radianos
                 min_samples=20,
                 metric='haversine'
             )
@@ -47,7 +55,7 @@ class CEPProcessor(threading.Thread):
                 alarme = {
                     "eventoID": f"cluster_{cod}_{cluster_id}",
                     "codErro": cod,
-                    "causa": eventos_cod[0].get("causa", "descohecida"),
+                    "causa": CAUSAS_ERRO.get(cod, "desconhecida"),
                     "timestamp": datetime.now().isoformat(),
                     "numero_eventos": len(cluster),
                     "localizacao_media": {
@@ -67,7 +75,9 @@ class CEPProcessor(threading.Thread):
             print(f"Erro ao enviar alarme via TCP: {e}")
 
 if __name__ == "__main__":
-    armazenamento = []
+    # Armazenamento agora é um dicionário com listas separadas por codErro
+    armazenamento = {1: [], 2: [], 3: [], 4: []}
+
     receptor = ReceptorUDP(armazenamento)
     cep = CEPProcessor(armazenamento)
 

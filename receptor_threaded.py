@@ -1,32 +1,29 @@
-import threading
 import socket
+import threading
 import json
 
 class ReceptorUDP(threading.Thread):
-    def __init__(self, armazenamento_compartilhado, porta=5005):
+    def __init__(self, armazenamento_compartilhado, ip_escuta="0.0.0.0", porta=5005):
         super().__init__(daemon=True)
         self.armazenamento = armazenamento_compartilhado
+        self.ip_escuta = ip_escuta
         self.porta = porta
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind((self.ip_escuta, self.porta))
 
     def run(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('', self.porta))
-        print(f"Thread 1 (UDP) escutando na porta {self.porta}...")
-
-        contador = 0
+        print("Thread 1 (Receptor UDP) iniciada.")
         while True:
-            data, _ = sock.recvfrom(1024)
             try:
-                mensagem = json.loads(data.decode('utf-8'))
-                if 'latitude' in mensagem and 'longitude' in mensagem:
-                    self.armazenamento.append({
-                        "id": contador,
-                        "latitude": mensagem["latitude"],
-                        "longitude": mensagem["longitude"],
-                        "codErro": mensagem.get("codErro", None),
-                        "causa": mensagem.get("causa", None)
-                    })
-                    contador += 1
-            except json.JSONDecodeError:
-                continue
+                data, addr = self.sock.recvfrom(1024)
+                mensagem = json.loads(data.decode("utf-8"))
+
+                cod = mensagem.get("codErro")
+                if cod in self.armazenamento:
+                    self.armazenamento[cod].append(mensagem)
+                    print(f"Recebido de {addr}: {mensagem}")
+                else:
+                    print(f"CodErro inválido ou fora do esperado: {cod}")
+
+            except Exception as e:
+                print(f"Erro no recebimento UDP: {e}")
