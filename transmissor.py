@@ -10,10 +10,10 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
 causas = ["altaTensao", "variaFreq", "subTensao", "quedaEnergia"]
-base_lat = 18
-base_lon = 48
+base_lat = random.uniform(30,40)
+base_lon = random.uniform(30,40)
 
-total_pacotes = 300000
+total_pacotes = 3000
 enviados = 0
 
 variaF = 0
