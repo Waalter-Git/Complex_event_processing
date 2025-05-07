@@ -33,8 +33,8 @@ def simular_recebimento():
     root.after(1000, simular_recebimento)
 
 def atualizar_interface():
-    status_udp.configure(text="✅ UDP Ativo")
-    status_cep.configure(text="✅ CEP Ativo")
+    status_udp.configure(text="✅ Thread UDP Ativa")
+    status_cep.configure(text="✅ Thread CEP Ativa")
     contador_label.configure(text=f"Eventos Recebidos: {eventos_recebidos}")
 
     if fila_alarmes:
@@ -62,16 +62,16 @@ def atualizar_grafico():
         grafico.set_ylabel("Latitude")
     canvas.draw()
 
-# GUI Setup
+# GUI
 root = ctk.CTk()
 root.title("Monitoramento de Quedas - Módulo 5b")
-root.geometry("960x720")
+root.geometry("1100x750")
 root.grid_columnconfigure((0, 1), weight=1)
 
 titulo = ctk.CTkLabel(root, text="Monitoramento de Quedas", font=("Arial", 24, "bold"))
 titulo.pack(pady=10)
 
-# STATUS TOPO
+# STATUS
 frame_status = ctk.CTkFrame(root, fg_color="#f0f0f0")
 frame_status.pack(pady=5)
 
@@ -84,34 +84,37 @@ status_cep.grid(row=0, column=1, padx=10, pady=10)
 contador_label = ctk.CTkLabel(frame_status, text="Eventos Recebidos: 0", font=("Arial", 14))
 contador_label.grid(row=0, column=2, padx=10, pady=10)
 
-# CONTEÚDO DIVIDIDO
+# CONTEÚDO
 frame_conteudo = ctk.CTkFrame(root, fg_color="transparent")
 frame_conteudo.pack(pady=5, fill="both", expand=True)
 
-# ESQUERDA: Alarme + Log
+frame_conteudo.grid_columnconfigure(0, weight=1)
+frame_conteudo.grid_columnconfigure(1, weight=2)  # gráfico com mais espaço
+
+# ALARMES E LOG
 frame_esquerda = ctk.CTkFrame(frame_conteudo, fg_color="#e5e5e5", corner_radius=10)
 frame_esquerda.grid(row=0, column=0, padx=10, pady=10, sticky="ns")
 
 ctk.CTkLabel(frame_esquerda, text="Últimos Alarmes", font=("Arial", 16, "bold")).pack(pady=5)
-area_alarme = ctk.CTkTextbox(frame_esquerda, height=120, width=320, font=("Consolas", 13), corner_radius=10)
+area_alarme = ctk.CTkTextbox(frame_esquerda, height=120, width=330, font=("Consolas", 13), corner_radius=10)
 area_alarme.configure(state="disabled")
 area_alarme.pack(padx=10, pady=(0, 10))
 
 ctk.CTkLabel(frame_esquerda, text="Log", font=("Arial", 14, "bold")).pack()
-log = ctk.CTkTextbox(frame_esquerda, height=150, width=320, font=("Consolas", 11), corner_radius=10)
+log = ctk.CTkTextbox(frame_esquerda, height=170, width=330, font=("Consolas", 11), corner_radius=10)
 log.pack(padx=10, pady=5)
 
-# DIREITA: Gráfico
+# GRÁFICO
 frame_direita = ctk.CTkFrame(frame_conteudo, fg_color="#e5e5e5", corner_radius=10)
-frame_direita.grid(row=0, column=1, padx=10, pady=10)
+frame_direita.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
 
 ctk.CTkLabel(frame_direita, text="Gráfico", font=("Arial", 16, "bold")).pack(pady=5)
 
-fig, grafico = plt.subplots(figsize=(5.5, 4))
+fig, grafico = plt.subplots(figsize=(7, 5.5))  # gráfico maior
 canvas = FigureCanvasTkAgg(fig, master=frame_direita)
-canvas.get_tk_widget().pack()
+canvas.get_tk_widget().pack(expand=True, fill="both")
 
-# BOTÃO DE ENCERRAR
+# BOTÃO
 botao_sair = ctk.CTkButton(root, text="Encerrar Monitoramento", fg_color="gray", command=root.destroy)
 botao_sair.pack(pady=15)
 
