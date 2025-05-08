@@ -12,17 +12,18 @@ def enviar_pacotes_udp(qtd_total=300000, qtd_agrupamentos=1, dispersao=0.003, de
 
     eventos = []
 
-    # Geração dos agrupamentos (clusters)
+    #Geração dos agrupamentos (clusters)
     for _ in range(qtd_agrupamentos):
-        base_lat = random.uniform(-90, 90)
-        base_lon = random.uniform(-180, 180)
-        for _ in range(600):
-            evento = {
-                "latitude": base_lat + random.uniform(-dispersao, dispersao),
-                "longitude": base_lon + random.uniform(-dispersao, dispersao),
-                "codErro": 2
+      base_lat = random.uniform(-90, 90)
+      base_lon = random.uniform(-180, 180)
+      for _ in range(600):
+           
+           evento = {
+            "latitude": base_lat + random.uniform(-dispersao, dispersao),
+            "longitude": base_lon + random.uniform(-dispersao, dispersao),
+            "codErro": 2
             }
-            eventos.append(evento)
+           eventos.append(evento)
 
     # Geração dos eventos de ruído (noise)
     resto = qtd_total - len(eventos)
@@ -45,4 +46,5 @@ def enviar_pacotes_udp(qtd_total=300000, qtd_agrupamentos=1, dispersao=0.003, de
     return eventos
 
 if __name__ == "__main__":
+
     enviar_pacotes_udp()
