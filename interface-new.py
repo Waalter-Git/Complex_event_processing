@@ -12,6 +12,7 @@ from datetime import datetime
 from sklearn.cluster import DBSCAN
 import subprocess
 import sys
+from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 
 # Configuração do socket para envio de alarmes via UDP
 ALARMES_DEST_IP = "10.14.100.224"
@@ -202,14 +203,15 @@ class InterfaceMonitoramento(ctk.CTk):
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=painel_direito)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.toolbar = NavigationToolbar2Tk(self.canvas, painel_direito)
+        self.toolbar.update()
+        self.toolbar.pack()
 
-        # Botão de encerrar
         self.botao_finalizar = ctk.CTkButton(self, text="Encerrar Monitoramento", command=self.encerrar_monitoramento)
         self.botao_finalizar.pack(pady=10)
 
         self.iniciar_monitoramento()
 
-    # Inicia os threads de monitoramento e CEP
     def iniciar_monitoramento(self):
         self.monitorando = True
         threading.Thread(target=receptor_udp, args=(self,), daemon=True).start()
